@@ -96,7 +96,9 @@ class USD_Model():
                 # 设置新样式
                 windll.user32.SetWindowLongW(hwnd, -16, c_int(style).value)
                 #windll.user32.SetWindowLongW(hwnd, -16, style)
-                windll.user32.MoveWindow(hwnd, 0, 0, 500, 400, True)    # 设置窗口尺寸  (0,0)左上角坐标;(500,400)窗口长宽;True立即重绘   
+                height = self.container.winfo_height()
+                width = self.container.winfo_width()
+                windll.user32.MoveWindow(hwnd, 0, 0, width, height, True)    # 设置窗口尺寸  (0,0)左上角坐标;(500,400)窗口长宽;True立即重绘   
                 break
             elif retries > 0:
                 self.root.after(500, lambda: self.find_and_embed_window(pid, retries-1))  # 0.5s后再次尝试
@@ -124,30 +126,17 @@ class USD_Model():
             hwnd = windll.user32.GetWindow(hwnd, 2) # 获取下一个窗口,2表示GW_HWNDNEXT，即下一个同级别的窗口
         return None
 
-class ALL_Model():
-    def __init__(self,all_file,container,root):
-        self.all_file = all_file
-        self.process = None
-        self.container = container
-        self.root = root
-        
-    def open_model(self):
-        print("open_model")
-    
-    def close_model(self):
-        print("close_model")
-
 class Model_Visual():
     def __init__(self,usd_file,all_file):
 
         self.root = tk.Tk()
-        self.root.title("Show and Compare")
+        self.root.title("模型展示")
         self.root.geometry("1200x800+800+250")
 
         # 创建用于嵌入模型的容器
         self.container = tk.Frame(self.root)
         self.container.pack(fill=tk.BOTH, expand=True)   # 填充整个窗口
-
+        #self.container["bg"]="black"
         # 创建两个展示模型的实例
         self.input = ALL_Model(all_file,self.container,self.root)
         self.output = USD_Model(usd_file,self.container,self.root)
@@ -157,18 +146,18 @@ class Model_Visual():
         button_frame.pack(side=tk.BOTTOM, pady=10)  # 将容器固定在底部
 
         # 创建按钮
-        btn_open_usd = tk.Button(button_frame, text="打开USD", command=self.output.embed_usdview)
+        btn_open_usd = tk.Button(button_frame, text="打开OpenUSD模型", command=self.output.embed_usdview)
         btn_open_usd["width"]=25
         btn_open_usd.grid(row=0,column=0,padx=(0,10))  
-        btn_close_usd = tk.Button(button_frame, text="关闭USD", command=self.output.close_usdview)
+        btn_close_usd = tk.Button(button_frame, text="关闭OpenUSD模型", command=self.output.close_usdview)
         btn_close_usd["width"]=25
-        btn_close_usd.grid(row=0,column=1,padx=(0,150)) 
-        btn_open_all = tk.Button(button_frame, text="打开All", command=self.input.open_model)
-        btn_open_all["width"]=25
-        btn_open_all.grid(row=0,column=2,padx=(0,10))   
-        btn_close_all = tk.Button(button_frame, text="关闭All", command=self.input.close_model)
-        btn_close_all["width"]=25
-        btn_close_all.grid(row=0,column=3) 
+        btn_close_usd.grid(row=0,column=1) 
+        # btn_open_all = tk.Button(button_frame, text="打开原模型", command=self.input.open_model)
+        # btn_open_all["width"]=25
+        # btn_open_all.grid(row=0,column=2,padx=(0,10))   
+        # btn_close_all = tk.Button(button_frame, text="关闭原模型", command=self.input.close_model)
+        # btn_close_all["width"]=25
+        # btn_close_all.grid(row=0,column=3) 
 
 
 
@@ -181,5 +170,16 @@ class Model_Visual():
         self.input.close_model()
         self.root.destroy()
 
-
+class ALL_Model():
+    def __init__(self,all_file,container,root):
+        self.all_file = all_file
+        self.process = None
+        self.container = container
+        self.root = root
+        
+    def open_model(self):
+        print("open_model")
+    
+    def close_model(self):
+        print("close_model")
 
