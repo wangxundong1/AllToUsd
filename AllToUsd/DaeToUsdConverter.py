@@ -2,10 +2,9 @@ import collada
 import collada.polygons
 import collada.polylist
 import collada.triangleset
-import pxr
 import numpy as np
 import math
-import os
+import time
 from pxr import Usd, UsdGeom, Gf, Sdf, UsdShade,UsdLux
 
 from collada import Collada
@@ -25,7 +24,7 @@ class DaeToUsdConverter:
         visual_scene = self.mesh_dae.scene
         nodes = visual_scene.nodes
         # print(nodes)
-        def process_node(parent_prim_path, node):   # , transform=None
+        def process_node(parent_prim_path, node):   # transform=None
             """递归处理场景节点"""
             # 创建当前节点的prim
             #print(node.id)
@@ -86,12 +85,11 @@ class DaeToUsdConverter:
 
             # 连接着色器节点与材质
             usd_mat.CreateSurfaceOutput().ConnectToSource(mat_shader.ConnectableAPI(),"surface")
-
-            # 创建几何体与材质的输入接口    应该修改为texcood
+            Texcoord = "st"
+            # 创建几何体与材质的输入接口  
             stInput = usd_mat.CreateInput('frame:stPrimvarName', Sdf.ValueTypeNames.Token)
-            stInput.Set("st")
-
-
+            #stInput.Set(Texcoord)                                                                                                                                           # 修改
+           
             # 获取<library_effect> 
             effect = mat.effect
 
@@ -99,7 +97,8 @@ class DaeToUsdConverter:
             if effect.emission is not None:
                 if isinstance(effect.emission, tuple):
                     emission_color = Gf.Vec3f(effect.emission[0], effect.emission[1], effect.emission[2])
-                    mat_shader.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(emission_color)
+                    if emission_color!=(0.11764706, 0.11764706, 0.11764706):
+                        mat_shader.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(emission_color)
                 elif isinstance(effect.emission, collada.material.Map):
                     sampler_surface = effect.emission.sampler.surface
                     img = sampler_surface.image
@@ -176,20 +175,20 @@ class DaeToUsdConverter:
                     mat_shader.CreateInput("specularColor", Sdf.ValueTypeNames.Color3f).Set(specular_color)
                 elif isinstance(effect.specular, collada.material.Map):                                                                                               
                     sampler_surface = effect.specular.sampler.surface
+                    texcoord = effect.specular.texcoord  # 通常为 "UVMap0" 或其他名称
                     img = sampler_surface.image
                     imgpath = img.path
 
-                    # 创建着色器
+                    # 设置UV坐标输入
+                    st_reader = UsdShade.Shader.Define(self.stage, f"{usd_mat.GetPath()}/Specular_st_reader")
+                    st_reader.CreateIdAttr("UsdPrimvarReader_float2")
+                    st_reader.CreateInput("varname", Sdf.ValueTypeNames.Token).Set(texcoord) 
+
+                    # 创建反射纹理采样器
                     texture_shader = UsdShade.Shader.Define(self.stage,f"{usd_mat.GetPath()}/SpecularTexture")
                     texture_shader.CreateIdAttr("UsdUVTexture")
                     texture_shader.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(imgpath)
-                    texture_shader.CreateInput("sourceColorSpace", Sdf.ValueTypeNames.Token).Set("raw")  # 假设纹理为sRGB颜色空间
-
-                    # 设置UV坐标输入
-                    texcoord = effect.specular.texcoord  # 通常为 "UVMap0" 或其他名称
-                    st_reader = UsdShade.Shader.Define(self.stage, f"{usd_mat.GetPath()}/Specular_st_reader")
-                    st_reader.CreateIdAttr("UsdPrimvarReader_float2")
-                    st_reader.CreateInput("varname", Sdf.ValueTypeNames.Token).Set(texcoord)                                                                # 指定使用哪个uv坐标
+                    texture_shader.CreateInput("sourceColorSpace", Sdf.ValueTypeNames.Token).Set("raw")
 
                     # 连接 UV 到纹理的 st 输入
                     texture_shader.CreateInput("st", Sdf.ValueTypeNames.Float2).ConnectToSource(st_reader.ConnectableAPI(), "result")
@@ -240,18 +239,20 @@ class DaeToUsdConverter:
                     sampler_surface = effect.reflective.sampler.surface
                     img = sampler_surface.image
                     imgpath = img.path
-
+                    # 设置UV坐标输入
+                    texcoord = effect.shininess.texcoord
+                    
+                    
+                    st_reader = UsdShade.Shader.Define(self.stage, f"{usd_mat.GetPath()}/Roughness_ST_Reader")
+                    st_reader.CreateIdAttr("UsdPrimvarReader_float2")
+                    st_reader.CreateInput("varname", Sdf.ValueTypeNames.Token).Set(texcoord)
+                    
+                    
                     # 创建粗糙度纹理着色器
                     texture_shader = UsdShade.Shader.Define(self.stage, f"{usd_mat.GetPath()}/RoughnessTexture")
                     texture_shader.CreateIdAttr("UsdUVTexture")
                     texture_shader.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(imgpath)
                     texture_shader.CreateInput("sourceColorSpace", Sdf.ValueTypeNames.Token).Set("raw")  # 粗糙度使用线性空间
-
-                    # 设置UV坐标输入
-                    texcoord = effect.shininess.texcoord
-                    st_reader = UsdShade.Shader.Define(self.stage, f"{usd_mat.GetPath()}/Roughness_ST_Reader")
-                    st_reader.CreateIdAttr("UsdPrimvarReader_float2")
-                    st_reader.CreateInput("varname", Sdf.ValueTypeNames.Token).Set(texcoord)
 
                     # 连接 UV 到纹理的 st 输入
                     texture_shader.CreateInput("st", Sdf.ValueTypeNames.Float2).ConnectToSource(st_reader.ConnectableAPI(), "result")
@@ -266,17 +267,21 @@ class DaeToUsdConverter:
                     # 简化方案：使用近似转换 roughness = 1.0 - (texture.r / 100.0)
                     texture_shader.CreateInput("scale", Sdf.ValueTypeNames.Float4).Set(Gf.Vec4f(-0.01, 0, 0, 0))  # 将0~100映射到1~0
                     texture_shader.CreateInput("bias", Sdf.ValueTypeNames.Float4).Set(Gf.Vec4f(1.0, 0, 0, 0))
-                    
+
+
+
                     # 连接到roughness属性
                     mat_shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).ConnectToSource(
                         texture_shader.ConnectableAPI(), "r"
                     )
 
+            daeReflectivity = 0.0
             # 处理reflectivity  与USD中metallic对应
             if effect.reflectivity is not None:
                 if isinstance(effect.reflectivity, float):
+                    daeReflectivity = effect.reflectivity
                     mat_shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(effect.reflectivity)
-                elif isinstance(effect.reflectivity, collada.material.Map):                                                                                                         
+                elif isinstance(effect.reflectivity, collada.material.Map):                                                                                                        
                     sampler_surface = effect.reflective.sampler.surface
                     img = sampler_surface.image
                     imgpath = img.path
@@ -295,7 +300,13 @@ class DaeToUsdConverter:
 
                     texture_shader.CreateInput("st", Sdf.ValueTypeNames.Float2).ConnectToSource(st_reader.ConnectableAPI(), "result")
                     mat_shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).ConnectToSource(texture_shader.ConnectableAPI(), "r")
-      
+
+            # 设置USD中useSpecularColor属性
+            if daeReflectivity>0.5:
+                mat_shader.CreateInput("useSpecularWorkflow", Sdf.ValueTypeNames.Int).Set(1)
+            else:
+                mat_shader.CreateInput("useSpecularWorkflow", Sdf.ValueTypeNames.Int).Set(0)
+
             # 处理transparent 与 transparency   与USD中opacity对应
             opacity = 1.0
             transparency = 0
@@ -304,6 +315,8 @@ class DaeToUsdConverter:
                 if isinstance(effect.transparency, float):
                     transparency = effect.transparency
                     opacity = transparency
+                    if opacity==0:
+                        opacity=1
                     mat_shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(opacity)
                 elif isinstance(effect.transparency, collada.material.Map):
                     sampler_surface = effect.transparency.sampler.surface
@@ -329,14 +342,17 @@ class DaeToUsdConverter:
                 if isinstance(effect.transparent, tuple):
                     alpha = effect.transparent[3]
                     opacity = 1.0 - transparency*(1-alpha)
+                    if opacity==0:
+                        opacity=1
                     mat_shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(opacity)
                 elif isinstance(effect.transparent, collada.material.Map):
                     # 检查透明度纹理着色器是否存在
                     if not self.stage.GetPrimAtPath(f"{usd_mat.GetPath()}/OpacityTexture").IsValid():
-                        # 创建透明度纹理着色器
                         sampler_surface = effect.transparent.sampler.surface
                         img = sampler_surface.image
                         imgpath = img.path
+
+                        # 创建透明度纹理着色器
                         texture_shader = UsdShade.Shader.Define(self.stage, f"{usd_mat.GetPath()}/OpacityTexture")
                         texture_shader.CreateIdAttr("UsdUVTexture")
                         texture_shader.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(imgpath)
@@ -367,6 +383,8 @@ class DaeToUsdConverter:
                 else:
                     usd_mat.CreateInput("doubleSided", Sdf.ValueTypeNames.Bool).Set(False)
 
+            # 将接口绑定
+            stInput.Set(Texcoord) 
 
     def convert_geometry(self):
         for i, geometry in enumerate(self.mesh_dae.geometries):
@@ -404,10 +422,10 @@ class DaeToUsdConverter:
                 if isinstance(primitive,collada.triangleset.TriangleSet):
                 # 写入面数量与顶点索引
                     if indices is not None:
-                        # face_counts = [3] * (len(indices))                                 
                         face_counts = []
                         for point in indices:
-                            face_counts.append(len(point))
+                            face_counts.append(len(point))                                 
+                        # face_counts = [len(point) for point in indices]
                         mesh_t.CreateFaceVertexCountsAttr(face_counts)
                         mesh_t.CreateFaceVertexIndicesAttr(indices)
                     
@@ -432,8 +450,6 @@ class DaeToUsdConverter:
                                 tx = float(texcoord[m][0])
                                 ty = float(texcoord[m][1])
                                 txset.append(Gf.Vec2f(tx,ty))
-                        # print(txset)
-                        # print(materialNode.inputs[idx][0])
                         primvar_api = UsdGeom.PrimvarsAPI(mesh_prim)
                         uv_primvar = primvar_api.CreatePrimvar(materialNode.inputs[idx][0], Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.faceVarying)
                         uv_primvar.Set(txset)
@@ -488,10 +504,13 @@ class DaeToUsdConverter:
                 if camera.xfov is not None:
                     xfov_rad = math.radians(camera.xfov)
                     horizontal_aperture_mm = 36.0  # 标准35mm胶片水平孔径（毫米）
-                    focal_length_mm = (horizontal_aperture_mm / 2) / math.tan(xfov_rad / 2)
+                    if xfov_rad==0:
+                        focal_length_mm = 0
+                    else:
+                        focal_length_mm = (horizontal_aperture_mm / 2) / math.tan(xfov_rad / 2)
                     camera_prim.CreateFocalLengthAttr().Set(focal_length_mm / 10)
                     camera_prim.CreateHorizontalApertureAttr().Set(horizontal_aperture_mm / 10)
-                    if camera.aspect_ratio is not None:
+                    if camera.aspect_ratio is not None and camera.aspect_ratio!=0:
                         camera_prim.CreateVerticalApertureAttr().Set((horizontal_aperture_mm / 10) / camera.aspect_ratio)
 
                 elif camera.yfov is not None:
@@ -538,7 +557,10 @@ class DaeToUsdConverter:
             light_parent_path = self.geometry_map[light.id]
             light_prim_path = f"{light_parent_path}/{original_name}"
             # 类型决策树
-            if light.type == "point":
+            if isinstance(light, collada.light.PointLight):
+                # for attr in dir(light):
+                #     if not attr.startswith("__"):
+                #         print(attr)
                 usd_light = UsdLux.SphereLight.Define(self.stage, light_prim_path)
                 if light.color is not None:
                     color = Gf.Vec3f(light.color[:3])
@@ -546,16 +568,16 @@ class DaeToUsdConverter:
                 else:
                     print("Error: Light Attr is Error")
                     return
-                if light.constant_attenuation is not None:
-                    const_atten = light.constant_attenuation
+                if light.constant_att is not None:
+                    const_atten = light.constant_att
                 else:
                     const_atten = 1.0
-                if light.linear_attenuation is not None:
-                    linear_atten = light.linear_attenuation
+                if light.linear_att is not None:
+                    linear_atten = light.linear_att
                 else:
                     linear_atten = 0.0
-                if light.quadratic_attenuation is not None:
-                    quad_atten = light.quadratic_attenuation
+                if light.quad_att is not None:
+                    quad_atten = light.quad_att
                 else:
                     quad_atten = 0.0
                 # 基于物理模型计算光照强度
@@ -569,7 +591,7 @@ class DaeToUsdConverter:
                 # 衰减模型标记
                 if quad_atten > 0:
                     usd_light.CreateTreatAsPointAttr().Set(True)
-            elif light.type == "spot":
+            elif isinstance(light, collada.light.SpotLight):
                 usd_light = UsdLux.SphereLight.Define(self.stage, light_prim_path)
                 shaping_api = UsdLux.ShapingAPI.Apply(usd_light.GetPrim())
                 if light.color is not None:
@@ -578,24 +600,24 @@ class DaeToUsdConverter:
                 else:
                     print("Error: Light Attr is Error")
                     return
-                if light.constant_attenuation is not None:
-                    const_atten = light.constant_attenuation
+                if light.constant_att is not None:
+                    const_atten = light.constant_att
                 else:
                     const_atten = 1.0
-                if light.linear_attenuation is not None:
-                    linear_atten = light.linear_attenuation
+                if light.linear_att is not None:
+                    linear_atten = light.linear_att
                 else:
                     linear_atten = 0.0
-                if light.quadratic_attenuation is not None:
-                    quad_atten = light.quadratic_attenuation
+                if light.quad_att is not None:
+                    quad_atten = light.quad_att
                 else:
                     quad_atten = 0.0
-                if light.falloff_angle is not None:
-                    cone_angle = math.radians(light.falloff_angle)
+                if light.falloff_ang is not None:
+                    cone_angle = math.radians(light.falloff_ang)
                 else:
                     cone_angle = math.radians(180)
-                if light.falloff_exponent is not None:
-                    cone_exponent = light.falloff_exponent
+                if light.falloff_exp is not None:
+                    cone_exponent = light.falloff_exp
                 else:
                     cone_exponent = 0.0
                 # 有效半径
@@ -615,7 +637,7 @@ class DaeToUsdConverter:
                 if linear_atten > 0:
                     focus = 1.0 - linear_atten/(quad_atten + 1e-5)
                     shaping_api.CreateShapingFocusAttr(focus)
-            elif light.type == "directional":
+            elif isinstance(light, collada.light.DirectionalLight):
                 usd_light = UsdLux.DistantLight.Define(self.stage, light_prim_path)
                 if light.color is not None:
                     color = Gf.Vec3f(light.color[:3])
@@ -623,7 +645,7 @@ class DaeToUsdConverter:
                 else:
                     print("Error: Light Attr is Error")
                     return
-            elif light.type == "ambient":
+            elif isinstance(light, collada.light.AmbientLight):
                 usd_light = UsdLux.DomeLight.Define(self.stage, light_prim_path)
                 if light.color is not None:
                     color = Gf.Vec3f(light.color[:3])
@@ -639,7 +661,7 @@ class DaeToUsdConverter:
         # 创建usd保存路径
         self.usd_file = usd_file
         if self.usd_file is None:
-            self.usd_file = self.dae_file[:-3]+"usd"
+            self.usd_file = self.dae_file[:-15]+".usd"
         # 创建 USD 场景
         self.stage = Usd.Stage.CreateNew(self.usd_file)
         UsdGeom.SetStageUpAxis(self.stage, UsdGeom.Tokens.y)  # 设置 Y 轴为上方向
@@ -652,24 +674,39 @@ class DaeToUsdConverter:
 
         # 处理视觉场景
         if self.mesh_dae.scene:
+            vistime = time.time()
             self.convert_visual_scene()
+            vistime = time.time()-vistime
+            print(f"处理视觉场景用时{vistime:.4f}")
+        
 
-        # 处理材质  未处理完
+        # 处理材质 
         if self.mesh_dae.materials:
+            mattime = time.time()
             self.convert_materials()
+            mattime=time.time()-mattime
+            print(f"处理材质用时{mattime:.4f}")
 
         # 遍历几何体并转换为 USD 
         if self.mesh_dae.geometries:
+            geomtime=time.time()
             self.convert_geometry()
-        
+            geomtime=time.time()-geomtime
+            print(f"处理几何体用时{geomtime:.4f}")
 
         # 处理相机参数
         if self.mesh_dae.cameras:
+            cametime=time.time()
             self.convert_cameras()
+            cametime=time.time()-cametime
+            print(f"处理相机用时{cametime:.4f}")
 
         # 处理灯光参数
         if self.mesh_dae.lights:
+            ligtime=time.time()
             self.convert_lights()
+            ligtime=time.time()-ligtime
+            print(f"处理灯光用时{ligtime:.4f}")
 
         # 保存 USD 文件
         self.stage.GetRootLayer().Save()
